@@ -1,0 +1,106 @@
+--- a/mods/office/main.js
++++ b/mods/office/main.js
+@@ -10,6 +10,7 @@
+ import { agents, terminals, spaces, panes, shared, run, setAgentOrder } from "herdr";
+ import * as A from "./art.js";
+ import * as D from "./decor.js";
++import * as PR from "./prs.js";
+ 
+ // Real weather in the windows. Off by default: it sends your IP address to ipapi.co for a
+ // rough location, then asks Open-Meteo for the current conditions there.
+@@ -22,6 +23,7 @@
+ const MUGS_AFTER = 60 * 60 * 1000;
+ const PARTY_FINISHES = 3, PARTY_WINDOW = 5 * 60 * 1000, PARTY_LENGTH = 8 * 60 * 1000;
+ const GRAD_BOW = 2500;
++const MERGE_BANNER = 60 * 1000;
+ const COUCH_SEATS = 3;
+ const MIN_DESKS = 3;
+ const FRONT_ROW = 6;
+@@ -98,6 +100,8 @@
+     this.hovered = null;
+     this.weather = null;
+     this.started = false;
++    this.mergeSeen = Date.now(); // merges before the office opened don't count
++    this.merge = null; // { repo, number, until }: the MERGED banner
+     this.cat = { goal: "sit", desk: null, since: Date.now() };
+     this.now = new Date();
+     this.incident = loadNumber("office.incident") ?? Date.now();
+@@ -163,6 +167,13 @@
+       if (this.started && a.status === "done" && was && was !== "done") this.finishes.push(now);
+       this.seen[a.address] = { status: a.status, pal: A.look(a.address) };
+     }
++    // A merged pull request (from the office-prs mod) counts as a finish toward the pizza.
++    for (const m of PR.mergesSince(PR.data(), this.mergeSeen)) {
++      this.mergeSeen = m.at;
++      this.finishes.push(now);
++      this.merge = { ...m, until: now + MERGE_BANNER };
++      cx.timer.after(MERGE_BANNER + 50, (cx) => cx.notify());
++    }
+     this.finishes = this.finishes.filter((t) => now - t < PARTY_WINDOW);
+     if (!this.party && this.finishes.length >= PARTY_FINISHES) {
+       this.party = { start: now };
+@@ -254,6 +265,7 @@
+     for (const s of spaces()) for (const t of s.tabs ?? []) tabs[t.id] = t;
+     const branches = {};
+     for (const p of panes()) branches[p.pane] = p.branch;
++    const prs = PR.data();
+ 
+     // The pizza: the courier walks in, leaves it on the counter, and walks out.
+     const party = this.party;
+@@ -294,7 +306,7 @@
+     const desks = Array.from({ length: deskCount }, (_, i) => {
+       const pos = g.deskPos(i);
+       const a = byDesk[i];
+-      return { back: pos.back, el: this.deskAt(i, pos, g, a, a && tabs[a.tab], a && branches[a.pane]) };
++      return { back: pos.back, el: this.deskAt(i, pos, g, a, a && tabs[a.tab], a && branches[a.pane], a && PR.forBranch(prs, branches[a.pane])) };
+     });
+ 
+     const hour = this.now.getHours();
+@@ -328,6 +340,7 @@
+         ...(alarmed.length ? D.alarm(W, H, g.deskPos(this.desk[alarmed[0].address]).x + 27 * P) : []),
+         ...(hovered && this.at[hovered.address] ? [this.thought(hovered, this.at[hovered.address], g)] : []),
+         ...(list.length ? [] : [this.sign(W, g)]),
++        ...(this.merge && now < this.merge.until ? [PR.mergeBanner(W, g.wallBottom - 9 * P - 30, this.merge, D.banner)] : []),
+       ]);
+   }
+ 
+@@ -360,10 +373,14 @@
+         ? { pal: A.look(star.address), name: star.space_name, remote: remote(star.address) } : null),
+       ...(remotes.length ? [(x) => D.videoWall(x + 4, 12, winH + 4, remotes)] : []),
+     ];
++    // The pull request corkboard (office-prs) hangs in place of the first window.
++    const prs = PR.data();
++    let board = prs ? (x) => PR.board(x + 4, 12, winH + 4, prs, now) : null;
+     const busy = [[g.doorX - 40, g.doorX + 16 * P + 30], [zoneX - 90, zoneX + 170]];
+     for (let x = 40, k = 0; x + 120 < W - 20; x += 220) {
+       if (busy.some(([a, b]) => x + 120 > a && x < b)) continue;
+       if (k % 2 === 1 && specials.length) els.push(specials.shift()(x));
++      else if (board && !busy.some(([a, b]) => x + 172 > a && x < b)) { els.push(board(x)); board = null; }
+       else els.push(k % 5 === 4 ? D.poster(x + 25, 18, winH, POSTERS[Math.floor(k / 5) % POSTERS.length]) : D.windowPane(x, 16, 120, winH, s, weather));
+       k++;
+     }
+@@ -380,6 +397,7 @@
+       ["#6b5fb5", `NAPPING  ${napping}`, napping > 0],
+       ["#c0643f", `INTERNS  ${interns}`, interns > 0],
+       ["#d94a3a", "PIZZA!!", Boolean(this.party)],
++      ...PR.whiteboardRows(prs),
+     ]));
+     if (when === "winter" || when === "newyear") els.push(...D.stringLights(W, 2));
+     if (when === "newyear") els.push(D.banner(W, wallBottom - 9 * P - 30, "HAPPY NEW YEAR", "#9b6bdc"));
+@@ -398,7 +416,7 @@
+ 
+   // A desk with its chair, monitor, bell and lamp, the branch on a sticky note, and the
+   // nameplate of whoever sits there.
+-  deskAt(i, pos, g, a, tab, branch) {
++  deskAt(i, pos, g, a, tab, branch, pr) {
+     const P = g.P;
+     const st = a?.status;
+     const away = Boolean(a) && this.at[a.address]?.spot !== "desk";
+@@ -413,6 +431,7 @@
+         ...(overtime ? A.rects(A.MUG_PILE, pal) : []),
+         this.screen(away ? "idle" : st, away, P),
+         ...(branch ? [this.sticky(branch, P)] : []),
++        ...(pr ? [PR.deskTag(pr, P)] : []),
+         A.layer(A.DESK.bell, pal, A.SLOT).when(done, (el) => el.loop("left", { from: -1.5, to: 1.5, period: 160 })),
+         ...(done ? [this.ding(P), ...this.confetti(P, a.address)] : []),
+         ...(plate ? [plate.absolute().left(6 * P).top(pos.back ? (A.BOX - 29) * P : A.BOX * P + 6)] : []),

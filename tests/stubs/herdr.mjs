@@ -1,0 +1,14 @@
+export const state = { shared: {}, notifications: [], runs: [], execs: [], props: {}, panes: [], spaces: [], agents: [], terminals: [], execImpl: null };
+export const shared = (k) => state.shared[k];
+export const setShared = (k, v) => { state.shared[k] = v; return null; };
+export const notify = (n) => { state.notifications.push(n); return "n"; };
+export const run = (name, args) => { state.runs.push({ name, args }); return null; };
+export const exec = (cmd, args, opts) => { state.execs.push([cmd, ...args]); return state.execImpl ? state.execImpl(cmd, args, opts) : Promise.resolve({ code: 0, stdout: "", stderr: "" }); };
+export const props = () => state.props;
+export const closeOverlay = () => null;
+export const panes = () => state.panes;
+export const spaces = () => state.spaces;
+export const agents = () => state.agents;
+export const terminals = () => state.terminals;
+export const setAgentOrder = () => null;
+export const theme = () => state.themeOverride ?? new Proxy({}, { get: (_t, k) => (typeof k === "string" ? "#123456" : undefined) });

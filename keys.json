@@ -1,0 +1,6 @@
+{
+  "layout:office": {
+    "ctrl-shift-i": "layout.toggle:office",
+    "ctrl-shift-g": "mod.open:office-prs"
+  }
+}
